@@ -308,30 +308,3 @@ The result summary always reports the actual size and target status.
 
 The application sends FFmpeg a graceful interrupt, escalates to termination if needed, waits for
 the child and its output readers, and removes the temporary output. The source is never modified.
-
-## Project layout
-
-```text
-.
-├── main.py
-├── compressor/
-│   ├── __init__.py
-│   ├── __main__.py
-│   ├── bitrate.py
-│   ├── cli.py
-│   ├── compression.py
-│   ├── config.py
-│   ├── encoders.py
-│   ├── errors.py
-│   ├── ffmpeg_tools.py
-│   ├── models.py
-│   ├── probe.py
-│   └── utils.py
-├── tests/
-├── build_common.py
-├── build_bundled.spec
-├── build_path.spec
-├── requirements.txt
-├── pyproject.toml
-└── .gitignore
-```
