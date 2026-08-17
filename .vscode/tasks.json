@@ -1,0 +1,121 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Compressor: Run (choose video)",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": [
+        "-B",
+        "main.py",
+        "${input:videoPath}",
+        "--target-size",
+        "${input:targetSizeMb}"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    },
+    {
+      "label": "Compressor: Help",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": ["-B", "main.py", "--help"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Test: Unit tests",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": [
+        "-B",
+        "-m",
+        "pytest",
+        "-v",
+        "tests"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": "$python",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    },
+    {
+      "label": "Build: PATH executable",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": [
+        "-m",
+        "PyInstaller",
+        "--noconfirm",
+        "--clean",
+        "build_path.spec"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    },
+    {
+      "label": "Build: Bundled FFmpeg executable",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": [
+        "-m",
+        "PyInstaller",
+        "--noconfirm",
+        "--clean",
+        "build_bundled.spec"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "videoPath",
+      "type": "promptString",
+      "description": "Path to the input video"
+    },
+    {
+      "id": "targetSizeMb",
+      "type": "promptString",
+      "description": "Target output size in MB",
+      "default": "10"
+    }
+  ]
+}

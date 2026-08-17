@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# PyInstaller
+build/
+dist/
+*.toc
+*.log
+
+# Editor and OS files
+.idea/
+.DS_Store
+Thumbs.db
+
+# Generated media and interrupted encodes
+*_compressed*.mp4
+.*.part-*.mp4
