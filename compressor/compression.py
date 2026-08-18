@@ -20,7 +20,11 @@ from compressor.bitrate import calculate_bitrate
 from compressor.config import (
     DISK_HEADROOM_FACTOR,
     FFMPEG_STDERR_TAIL_LINES,
+    MAX_AUDIO_KBPS,
+    MIN_AUDIO_KBPS,
     MINIMUM_DISK_HEADROOM_BYTES,
+    MINIMUM_OUTPUT_DIMENSION,
+    TARGET_VIDEO_BITS_PER_PIXEL,
 )
 from compressor.encoders import ENCODERS, get_encoder_options
 from compressor.errors import (
@@ -34,6 +38,7 @@ from compressor.errors import (
 from compressor.ffmpeg_tools import resolve_ffmpeg_tools
 from compressor.models import CompressionResult
 from compressor.probe import probe_video
+from compressor.resolution import calculate_output_resolution
 from compressor.utils import path_is_occupied, paths_refer_to_same_location
 
 LOGGER = logging.getLogger(__name__)
@@ -47,6 +52,11 @@ def compress_video(
     *,
     tools=None,
     progress_callback=None,
+    auto_downscale=True,
+    target_bits_per_pixel=TARGET_VIDEO_BITS_PER_PIXEL,
+    minimum_dimension=MINIMUM_OUTPUT_DIMENSION,
+    min_audio_kbps=MIN_AUDIO_KBPS,
+    max_audio_kbps=MAX_AUDIO_KBPS,
 ):
     """Compress one video to an MP4 near or below the requested target size."""
     input_path, output_path = _validate_paths(input_path, output_path)
@@ -60,10 +70,26 @@ def compress_video(
         video_info.duration,
         target_size_mb,
         video_info.has_audio,
+        min_audio_kbps=min_audio_kbps,
+        max_audio_kbps=max_audio_kbps,
     )
-    if bitrate_budget.low_video_bitrate:
-        LOGGER.warning(
-            "The target permits only %.1f kbps for video; image quality will likely be poor.",
+    if auto_downscale:
+        output_resolution = calculate_output_resolution(
+            video_info.width,
+            video_info.height,
+            video_info.fps,
+            bitrate_budget.video_kbps,
+            target_bits_per_pixel=target_bits_per_pixel,
+            minimum_dimension=minimum_dimension,
+        )
+    else:
+        output_resolution = (video_info.width, video_info.height)
+    if output_resolution != (video_info.width, video_info.height):
+        LOGGER.info(
+            "Downscaling video from %dx%d to %dx%d to preserve quality at %.1f kbps.",
+            video_info.width,
+            video_info.height,
+            *output_resolution,
             bitrate_budget.video_kbps,
         )
     _validate_disk_space(output_path.parent, target_size_mb)
@@ -83,6 +109,7 @@ def compress_video(
         video_info,
         bitrate_budget,
         encoder_type,
+        output_resolution=output_resolution,
     )
 
     encode_started = time.monotonic()
@@ -129,6 +156,7 @@ def compress_video(
         target_size_mb=target_size_mb,
         met_target=final_size <= target_bytes,
         bitrate_budget=bitrate_budget,
+        output_resolution=output_resolution,
     )
 
 
@@ -195,13 +223,26 @@ def _build_compression_graph(
     video_info,
     bitrate_budget,
     encoder_type,
+    *,
+    output_resolution=None,
 ):
     source = ffmpeg.input(str(input_path))
     encoder_options = get_encoder_options(encoder_type, bitrate_budget.video_kbps)
 
+    output_resolution = output_resolution or calculate_output_resolution(
+        video_info.width,
+        video_info.height,
+        video_info.fps,
+        bitrate_budget.video_kbps,
+    )
+    if output_resolution != (video_info.width, video_info.height):
+        width, height = output_resolution
+        encoder_options["vf"] = f"scale={width}:{height}:flags=lanczos," + str(
+            encoder_options["vf"]
+        )
     # H.264 4:2:0 formats require even dimensions. Preserve the configured format
     # filter, adding only a one-pixel edge pad when an otherwise-valid input is odd.
-    if video_info.width % 2 or video_info.height % 2:
+    elif video_info.width % 2 or video_info.height % 2:
         encoder_options["vf"] = "pad=ceil(iw/2)*2:ceil(ih/2)*2," + str(encoder_options["vf"])
 
     output_options = {

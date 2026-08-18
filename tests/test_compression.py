@@ -108,7 +108,7 @@ def test_progress_parser_uses_microseconds_and_clamps(progress, duration, expect
     assert _progress_percentage(progress, duration) == expected
 
 
-def test_low_video_bitrate_is_logged_before_encoding(
+def test_low_video_bitrate_selects_a_smaller_resolution_before_encoding(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
@@ -128,13 +128,15 @@ def test_low_video_bitrate_is_logged_before_encoding(
     )
     monkeypatch.setattr("compressor.compression.probe_video", lambda *_args, **_kwargs: info)
 
-    def stop_after_warning(*_args, **_kwargs):
-        raise CompressionError("stop after warning")
+    def stop_after_resolution_selection(*_args, **_kwargs):
+        raise CompressionError("stop after resolution selection")
 
-    monkeypatch.setattr("compressor.compression._validate_disk_space", stop_after_warning)
+    monkeypatch.setattr(
+        "compressor.compression._validate_disk_space", stop_after_resolution_selection
+    )
 
     with (
-        caplog.at_level(logging.WARNING, logger="compressor.compression"),
+        caplog.at_level(logging.INFO, logger="compressor.compression"),
         pytest.raises(CompressionError),
     ):
         compress_video(
@@ -145,7 +147,35 @@ def test_low_video_bitrate_is_logged_before_encoding(
             tools=tools,
         )
 
-    assert "image quality will likely be poor" in caplog.text
+    assert "Downscaling video from 640x360 to 228x128" in caplog.text
+
+
+def test_graph_downscales_to_selected_resolution(
+    tools: FFmpegTools,
+):
+    info = VideoInfo(
+        path=Path("large input.mp4"),
+        duration=60.0,
+        width=1920,
+        height=1080,
+        video_codec="h264",
+        has_audio=False,
+        audio_codec=None,
+        fps=30.0,
+    )
+    low_budget = BitrateBudget(250.0, 250.0, 0.0, False)
+
+    command = tools.compile_graph(
+        _build_compression_graph(
+            info.path,
+            Path("small output.mp4"),
+            info,
+            low_budget,
+            "cpu",
+        )
+    )
+
+    assert "scale=444:250:flags=lanczos,format=yuv420p" in command
 
 
 def test_completed_temporary_output_is_published_without_overwrite(tmp_path: Path):

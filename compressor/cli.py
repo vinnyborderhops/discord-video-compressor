@@ -3,14 +3,17 @@
 import argparse
 import logging
 import math
+import os
+import subprocess
 import sys
+from contextlib import suppress
 from pathlib import Path
 
 from compressor import __version__
 from compressor.compression import compress_video
-from compressor.config import DEFAULT_TARGET_SIZE_MB, ConfigurationStore
+from compressor.config import DEFAULT_TARGET_SIZE_MB, ApplicationSettings, ConfigurationStore
 from compressor.encoders import ENCODERS, select_encoder
-from compressor.errors import CompressorError, ValidationError
+from compressor.errors import CompressorError, ConfigurationError, ValidationError
 from compressor.ffmpeg_tools import resolve_ffmpeg_tools
 from compressor.utils import format_bytes, generate_output_path
 
@@ -42,15 +45,17 @@ def build_parser():
         "-t",
         "--target-size",
         type=float,
-        default=DEFAULT_TARGET_SIZE_MB,
         metavar="MB",
-        help=f"target output size in MiB-style MB (default: {DEFAULT_TARGET_SIZE_MB:g})",
+        help=(
+            "override the target output size in MiB-style MB "
+            f"(settings default: {DEFAULT_TARGET_SIZE_MB:g})"
+        ),
     )
     encoder_group = parser.add_mutually_exclusive_group()
     encoder_group.add_argument(
         "--encoder",
         choices=tuple(ENCODERS),
-        help="temporarily use and validate one encoder without changing the cache",
+        help="override the configured encoder for this run",
     )
     encoder_group.add_argument(
         "--redetect-encoder",
@@ -61,6 +66,22 @@ def build_parser():
         "--show-encoder",
         action="store_true",
         help="validate and display the selected encoder, then exit",
+    )
+    config_group = parser.add_mutually_exclusive_group()
+    config_group.add_argument(
+        "--show-config",
+        action="store_true",
+        help="create settings if needed and display the settings path",
+    )
+    config_group.add_argument(
+        "--reset-config",
+        action="store_true",
+        help="replace settings with defaults and exit",
+    )
+    config_group.add_argument(
+        "--open-config",
+        action="store_true",
+        help="open settings in the default editor and exit",
     )
     logging_group = parser.add_mutually_exclusive_group()
     logging_group.add_argument(
@@ -89,22 +110,36 @@ def main(argv=None):
 
     parser = build_parser()
     args = parser.parse_args(argv)
-    _configure_logging(verbose=args.verbose, debug=args.debug)
+    config_action = args.show_config or args.reset_config or args.open_config
 
-    if args.input is None and not (args.show_encoder or args.redetect_encoder):
-        parser.error(
-            "an input video is required unless --show-encoder or --redetect-encoder is used"
-        )
+    if args.input is None and not (args.show_encoder or args.redetect_encoder or config_action):
+        parser.error("an input video is required unless an encoder or config command is used")
     if args.output is not None and args.input is None:
         parser.error("--output requires an input video")
 
+    settings = ApplicationSettings()
     try:
+        config_store = ConfigurationStore()
+        if config_action:
+            _configure_logging(verbose=args.verbose, debug=args.debug)
+            return _run_config_action(args, config_store)
+
+        settings = config_store.load_settings()
+        verbose = args.verbose or settings.console.verbose
+        _configure_logging(verbose=verbose, debug=args.debug)
+
+        target_size_mb = (
+            args.target_size if args.target_size is not None else settings.target_size_mb
+        )
+        requested_encoder = args.encoder
+        if requested_encoder is None and not args.redetect_encoder and settings.encoder != "auto":
+            requested_encoder = settings.encoder
+
         if args.input is not None:
-            _validate_cli_target(args.target_size)
+            _validate_cli_target(target_size_mb)
 
         tools = resolve_ffmpeg_tools()
-        config_store = ConfigurationStore()
-        if args.verbose or args.debug:
+        if verbose or args.debug:
             source = "bundled" if tools.bundled else "PATH"
             print(f"FFmpeg ({source}): {tools.ffmpeg_path}")
             print(f"FFprobe ({source}): {tools.ffprobe_path}")
@@ -112,7 +147,7 @@ def main(argv=None):
         selection = select_encoder(
             tools,
             config_store,
-            requested_encoder=args.encoder,
+            requested_encoder=requested_encoder,
             force_redetection=args.redetect_encoder,
             status_callback=print,
         )
@@ -126,21 +161,30 @@ def main(argv=None):
                 print(f"Encoder cache: {config_store.path}")
             return 0
 
-        output_path = args.output or generate_output_path(args.input)
+        output_path = args.output or generate_output_path(
+            args.input,
+            directory=settings.output.directory,
+            suffix=settings.output.suffix,
+        )
         print(f"Input: {args.input}")
         print(f"Output: {output_path}")
         print(f"Encoder: {selection.encoder_type} ({selection.encoder}) [{selection.source}]")
-        print(f"Target: {args.target_size:g} MB")
+        print(f"Target: {target_size_mb:g} MB")
 
         progress = ConsoleProgress()
         try:
             result = compress_video(
                 args.input,
                 output_path,
-                args.target_size,
+                target_size_mb,
                 selection.encoder_type,
                 tools=tools,
                 progress_callback=progress.update,
+                auto_downscale=settings.quality.auto_downscale,
+                target_bits_per_pixel=settings.quality.target_bits_per_pixel,
+                minimum_dimension=settings.quality.minimum_dimension,
+                min_audio_kbps=settings.audio.minimum_bitrate_kbps,
+                max_audio_kbps=settings.audio.maximum_bitrate_kbps,
             )
         finally:
             progress.finish()
@@ -164,6 +208,66 @@ def main(argv=None):
                 file=sys.stderr,
             )
         return 1
+    finally:
+        if settings is not None and settings.console.pause_on_exit and _is_explorer_launch():
+            _pause_before_exit()
+
+
+def _run_config_action(args, config_store):
+    if args.reset_config:
+        config_store.reset_settings()
+        print(f"Configuration reset: {config_store.settings_path}")
+        return 0
+    if not config_store.settings_path.exists():
+        config_store.reset_settings()
+    if args.open_config:
+        _open_config_file(config_store.settings_path)
+        print(f"Configuration opened: {config_store.settings_path}")
+        return 0
+
+    print("Configuration:")
+    print(config_store.settings_path)
+    return 0
+
+
+def _open_config_file(path):
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)], start_new_session=True)
+        else:
+            subprocess.Popen(["xdg-open", str(path)], start_new_session=True)
+    except OSError as exc:
+        raise ConfigurationError(
+            f"Could not open settings in the default editor: '{path}'.",
+            details=str(exc),
+        ) from exc
+
+
+def _is_explorer_launch():
+    """Detect a frozen Windows app running alone in its new console."""
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return False
+    if not bool(getattr(sys.stdin, "isatty", lambda: False)()):
+        return False
+
+    try:
+        import ctypes
+
+        process_ids = (ctypes.c_ulong * 8)()
+        process_count = ctypes.windll.kernel32.GetConsoleProcessList(  # type: ignore[attr-defined]
+            process_ids,
+            len(process_ids),
+        )
+    except (AttributeError, OSError):
+        return False
+    return process_count == 1
+
+
+def _pause_before_exit():
+    with suppress(EOFError, KeyboardInterrupt, OSError):
+        input("Press Enter to close...")
 
 
 class ConsoleProgress:
@@ -210,11 +314,14 @@ def _configure_logging(*, verbose, debug):
 
 def _print_result(result):
     info = result.video_info
+    output_width, output_height = result.output_resolution or (info.width, info.height)
     fps = f"{info.fps:.3f}" if info.fps is not None else "unknown"
     audio = info.audio_codec if info.has_audio else "none"
     target_status = "yes" if result.met_target else "NO (encoder overshoot)"
     print("Compression complete.")
     print(f"Media: {info.width}x{info.height}, {fps} fps, video={info.video_codec}, audio={audio}")
+    if (output_width, output_height) != (info.width, info.height):
+        print(f"Output resolution: {output_width}x{output_height} (bitrate-aware downscale)")
     print(f"Original size: {format_bytes(result.original_size_bytes)}")
     print(f"Final size: {format_bytes(result.final_size_bytes)}")
     print(f"Size reduction: {result.compression_percentage:.2f}%")

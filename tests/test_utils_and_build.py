@@ -23,6 +23,18 @@ def test_output_name_collision_sequence(tmp_path):
     assert generate_output_path(input_path) == (tmp_path / "my video (final)_compressed_3.mp4")
 
 
+def test_output_path_supports_configured_directory_and_suffix(tmp_path):
+    input_path = tmp_path / "source" / "clip.mov"
+    output_directory = tmp_path / "compressed"
+    output_directory.mkdir()
+
+    assert generate_output_path(
+        input_path,
+        directory=str(output_directory),
+        suffix="_discord",
+    ) == (output_directory / "clip_discord.mp4")
+
+
 def test_specs_differ_only_by_bundle_boolean():
     project_root = Path(__file__).resolve().parents[1]
     bundled = (project_root / "build_bundled.spec").read_text(encoding="utf-8")

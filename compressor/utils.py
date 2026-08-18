@@ -9,16 +9,17 @@ def path_is_occupied(path):
     return os.path.lexists(path)
 
 
-def generate_output_path(input_path):
-    """Generate a non-colliding ``*_compressed.mp4`` path beside the input."""
+def generate_output_path(input_path, *, directory="source", suffix="_compressed"):
+    """Generate a non-colliding configured MP4 output path."""
     input_path = Path(input_path)
-    base = input_path.with_name(f"{input_path.stem}_compressed.mp4")
+    output_directory = input_path.parent if directory == "source" else Path(directory).expanduser()
+    base = output_directory / f"{input_path.stem}{suffix}.mp4"
     if not path_is_occupied(base):
         return base
 
     counter = 2
     while True:
-        candidate = input_path.with_name(f"{input_path.stem}_compressed_{counter}.mp4")
+        candidate = output_directory / f"{input_path.stem}{suffix}_{counter}.mp4"
         if not path_is_occupied(candidate):
             return candidate
         counter += 1

@@ -1,337 +1,329 @@
 # Discord Video Compressor
 
-A production-oriented Python command-line application that compresses a video to a
-user-selected target file size. It produces a broadly compatible MP4 containing H.264
-video and, when the source has audio, AAC audio.
+A Python CLI for compressing videos toward a target file size with automatic hardware acceleration, bitrate-aware downscaling, progress reporting, and safe output handling.
 
-The application uses `ffmpeg-python` to build commands and always invokes one centrally
-resolved FFmpeg/FFprobe pair. It supports automatic hardware acceleration, persistent
-encoder caching, progress reporting, safe temporary outputs, drag-and-drop use on Windows,
-and two synchronized PyInstaller builds.
+The compressor probes the source with FFprobe, calculates a video/audio bitrate budget, validates the best available encoder, and produces a broadly compatible H.264/AAC MP4.
 
-## Highlights
+## Features
 
-- Configurable target size (20 MB by default)
-- NVIDIA NVENC (`h264_nvenc`)
-- AMD AMF (`h264_amf`)
-- Intel Quick Sync (`h264_qsv`)
-- Apple VideoToolbox (`h264_videotoolbox`)
-- CPU fallback (`libx264`)
-- Real encoder initialization tests rather than GPU-vendor guesses
-- Persistent per-user automatic encoder cache
-- FFprobe metadata normalization and output validation
-- Same-directory temporary encode and no-overwrite final publication
-- MP4 fast-start metadata for easier sharing/streaming
-- Useful normal output and detailed `--debug` diagnostics
-- One-file PyInstaller builds with or without bundled FFmpeg
+* Configurable target size (`20 MB` by default)
+* H.264 video with AAC audio when audio is present
+* Automatic encoder detection using real initialization tests
+
+  * NVIDIA NVENC (`h264_nvenc`)
+  * AMD AMF (`h264_amf`)
+  * Intel Quick Sync (`h264_qsv`)
+  * Apple VideoToolbox (`h264_videotoolbox`)
+  * CPU fallback (`libx264`)
+* Persistent per-user encoder cache with validation before reuse
+* Temporary per-run encoder overrides
+* Bitrate-aware resolution downscaling without upscaling
+* Terminal progress reporting
+* MP4 `faststart` metadata
+* Same-directory temporary encodes and validated final publication
+* No-overwrite output behavior and filename collision avoidance
+* Cleanup after failed or interrupted encodes
+* Normal, verbose, and debug output modes
+* Windows drag-and-drop support for built executables
+* PATH-based and FFmpeg-bundled PyInstaller builds
+* Pytest test suite and Ruff configuration
 
 ## Requirements
 
-- Python 3.10 or newer when running from source
-- Dependencies from `requirements.txt`
-- FFmpeg and FFprobe:
-  - on `PATH` when running from source or using the PATH executable build; or
-  - on the build machine's `PATH` while creating the bundled executable
+* Python 3.10+ recommended
+* [`ffmpeg-python`](https://github.com/kkroening/ffmpeg-python)
+* FFmpeg and FFprobe when running from source or using the PATH build
 
-`ffmpeg-python` is a Python wrapper; it does not itself install FFmpeg.
+Install the Python dependencies:
 
-## Install
+```bash
+python -m pip install -r requirements.txt
+```
 
-Create and activate a virtual environment, then install the requirements:
+Verify FFmpeg and FFprobe:
+
+```bash
+ffmpeg -version
+ffprobe -version
+```
+
+The bundled executable build includes the FFmpeg/FFprobe pair found on the build machine, so those tools do not need to be installed separately on the target machine.
+
+## Installation
+
+Create a virtual environment:
 
 ```bash
 python -m venv .venv
 ```
 
-Windows PowerShell:
+### Windows PowerShell
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 ```
 
-Windows Command Prompt:
+### Windows Command Prompt
+
 ```batch
-.\.venv\Scripts\Activate.bat
+.\.venv\Scripts\activate.bat
 python -m pip install -r requirements.txt
 ```
 
-macOS/Linux:
+### macOS / Linux
 
 ```bash
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-Confirm the external programs are visible when using the source or PATH build:
+For development tools:
 
 ```bash
-ffmpeg -version
-ffprobe -version
+python -m pip install -r requirements-optional.txt
 ```
 
-## Run from source
+## Usage
+
+Compress a video using the default `20 MB` target:
 
 ```bash
 python main.py video.mp4
-python main.py video.mp4 --target-size 10
-python main.py video.mp4 --output compressed.mp4
-python main.py video.mp4 --encoder nvidia
-python main.py video.mp4 --encoder cpu
-python main.py video.mp4 --redetect-encoder
-python main.py --show-encoder
-python main.py --show-encoder --redetect-encoder
-python main.py video.mp4 --debug
 ```
 
-You can also run the package:
+The package entry point is equivalent:
 
 ```bash
 python -m compressor video.mp4
 ```
 
-Use `python main.py --help` for the complete CLI reference.
+### Set the target size
 
-Manual `--encoder` selection validates the requested encoder for that run. It does not read,
-replace, or otherwise alter the cached automatic preference.
+```bash
+python main.py video.mp4 --target-size 10
+```
 
-## Automatic encoder detection and caching
+Short form:
 
-The application does not detect every encoder on every launch.
+```bash
+python main.py video.mp4 -t 10
+```
 
-On the first automatic run, when the cache is absent or invalid, it performs a short real
-encode with each supported encoder. The test uses a tiny generated color source, the null
-muxer, and the same advanced quality profile used by real compression. It therefore verifies
-that all of the following work together:
+### Choose the output path
 
-- the FFmpeg build contains the encoder;
-- the required driver/runtime is installed;
-- the hardware can initialize the encoder; and
-- the configured quality options are accepted.
+```bash
+python main.py video.mp4 --output compressed.mp4
+```
 
-The best working encoder is selected in this order:
+Without `--output`, the compressor creates `INPUT_compressed.mp4`. If that path already exists, it selects a collision-safe filename instead of overwriting it.
 
-1. NVIDIA NVENC
-2. AMD AMF
-3. Intel Quick Sync
-4. Apple VideoToolbox
-5. CPU/libx264
+### Force an encoder for one run
 
-The selected logical type and exact FFmpeg codec are saved atomically in `config.json`, for
-example:
+```bash
+python main.py video.mp4 --encoder nvidia
+```
+
+Valid values are `nvidia`, `amd`, `intel`, `mac`, and `cpu`.
+
+Manual overrides are validated before use and do not replace the automatically cached preference.
+
+### Inspect or redetect the encoder
+
+```bash
+python main.py --show-encoder
+python main.py --redetect-encoder
+```
+
+### Diagnostics
+
+```bash
+python main.py video.mp4 --verbose
+python main.py video.mp4 --debug
+```
+
+View all CLI options:
+
+```bash
+python main.py --help
+```
+
+## Settings
+
+`settings.json` is created with defaults on first launch. Find, open, or reset it with:
+
+```bash
+python main.py --show-config
+python main.py --open-config
+python main.py --reset-config
+```
+
+Default settings:
 
 ```json
 {
-  "encoder": "h264_nvenc",
-  "preferred_encoder": "nvidia",
   "schema_version": 1,
-  "validated_at": "2026-01-01T12:00:00+00:00"
+  "target_size_mb": 20.0,
+  "encoder": "auto",
+  "output": {
+    "directory": "source",
+    "suffix": "_compressed"
+  },
+  "quality": {
+    "auto_downscale": true,
+    "target_bits_per_pixel": 0.075,
+    "minimum_dimension": 128
+  },
+  "audio": {
+    "minimum_bitrate_kbps": 64.0,
+    "maximum_bitrate_kbps": 96.0
+  },
+  "console": {
+    "verbose": false,
+    "pause_on_exit": true
+  }
 }
 ```
 
-On later launches, only that one cached encoder receives the small initialization test. If it
-works, it is used immediately and the full scan is skipped. If the cache is missing, corrupt,
-uses an old schema, contains a mismatched encoder pair, or its encoder no longer initializes,
-the full detection runs and a successful result replaces the cache.
+Settings locations:
 
-Force a full scan and cache update with:
+* Windows: `%LOCALAPPDATA%\DiscordVideoCompressor\settings.json`
+* macOS: `~/Library/Application Support/DiscordVideoCompressor/settings.json`
+* Linux: `${XDG_CONFIG_HOME:-~/.config}/discord-video-compressor/settings.json`
 
-```bash
-compressor video.mp4 --redetect-encoder
-```
+`encoder` accepts `auto`, `nvidia`, `amd`, `intel`, `mac`, or `cpu`. `output.directory` accepts `source` or a directory path. Existing outputs are never overwritten.
 
-or redetect without compressing:
+CLI options override settings. `--target-size` overrides `target_size_mb`; `--encoder` overrides `encoder`; `--verbose` and `--debug` override normal console verbosity.
 
-```bash
-compressor --show-encoder --redetect-encoder
-```
+## Windows Drag and Drop
 
-### Cache location
+A built Windows executable can be used by dragging a video directly onto `DiscordVideoCompressor.exe`.
 
-- Windows: `%LOCALAPPDATA%\DiscordVideoCompressor\config.json`
-- macOS: `~/Library/Application Support/DiscordVideoCompressor/config.json`
-- Linux: `${XDG_CONFIG_HOME:-~/.config}/discord-video-compressor/config.json`
+The dropped file uses `settings.json` for target size, encoder, output naming, quality, audio, and console behavior. `pause_on_exit` keeps an Explorer-launched console open so errors and results remain visible.
 
-If configuration storage is temporarily unwritable, compression can still continue, but a
-warning explains that detection will be needed on the next launch.
+## Encoder Selection
 
-## Encoder quality settings
+Automatic detection uses this priority order:
 
-The quality profiles include NVENC P7/full-resolution
-multipass and AQ, AMF preanalysis/lookahead/adaptive mini-GOP settings, QSV lookahead/MBBRC/RDO,
-VideoToolbox offline mode, and libx264's slow preset. The bitrate-specific `b:v`, `maxrate`, and
-`bufsize` behavior is also preserved.
+| Priority | Type   | FFmpeg encoder      |
+| -------: | ------ | ------------------- |
+|        1 | NVIDIA | `h264_nvenc`        |
+|        2 | AMD    | `h264_amf`          |
+|        3 | Intel  | `h264_qsv`          |
+|        4 | Apple  | `h264_videotoolbox` |
+|        5 | CPU    | `libx264`           |
 
-These advanced options require compatible FFmpeg, drivers, runtimes, and hardware. If a build
-or driver rejects an option, the application does not silently weaken the profile. The encoder
-initialization test marks that candidate incompatible, records FFmpeg's explanation under
-`--debug`, and automatic selection falls back to the next working encoder. Updating FFmpeg and
-the graphics driver is the preferred fix.
+The application does not select an encoder based only on detected hardware. Each candidate performs a small real encode using the production option profile. The first encoder that successfully initializes is selected.
 
-H.264 4:2:0 formats require even dimensions. For an odd-sized source, the actual compression
-graph pads the right or bottom edge by at most one pixel before the preserved `yuv420p`/`nv12`
-format filter. This prevents an otherwise obscure hardware-encoder failure without scaling the
-picture.
+The automatic result is cached per user, but the cached encoder is initialization-tested again before reuse so driver or hardware changes do not permanently leave a stale selection.
 
-## Target-size calculation
+## How Compression Works
 
-The usable total bitrate is:
+At a high level, each run:
 
-```text
-target_size_mb * 8 * 1024 * 0.97 / duration_seconds
-```
+1. Resolves and validates one matching FFmpeg/FFprobe pair.
+2. Probes the source video.
+3. Calculates a bitrate budget from video duration and requested size.
+4. Allocates AAC audio bitrate when audio is present.
+5. Assigns the remaining bitrate to H.264 video.
+6. Reduces resolution when the available bitrate is too low for the source resolution.
+7. Encodes to a temporary MP4 while reporting progress.
+8. Validates the completed temporary output.
+9. Publishes the final file without silently overwriting another file.
+10. Reports the final size, size reduction, encoder, encode time, and target-size status.
 
-The `0.97` efficiency factor leaves approximately three percent for MP4 container overhead. When
-audio is present, it receives 15% of the total constrained to 64-96 kbps, and video receives the
-remainder. Silent inputs allocate the full usable budget to video and do not gain a synthetic
-audio stream.
+The compressor favors a useful bitrate-per-pixel level over preserving source resolution at any cost.
 
-Hardware and software encoders use one-pass constrained VBR, so exact byte-level sizing cannot
-be guaranteed. The completion summary explicitly reports whether the final file met the target.
-Very small targets can produce visibly poor video; the program warns below 250 kbps and rejects
-a target that leaves no positive video budget.
+## Building Executables
 
-## Output safety and drag-and-drop
-
-By default, `video.ext` is written beside its source as `video_compressed.mp4`. If that exists,
-the next free name is used (`video_compressed_2.mp4`, and so on).
-
-An explicit existing output is never overwritten. The source can never be the output. Encoding
-occurs under a randomized `.part-....mp4` name in the destination directory. Only a successful,
-non-empty, FFprobe-validated result is published to the final path. Failed and interrupted
-encodes clean up the temporary file.
-
-On Windows, drag a video onto `DiscordVideoCompressor.exe`. Windows supplies the dropped path in
-`sys.argv`, so it follows the same validation, collision avoidance, encoder selection, and
-progress flow as the normal CLI. Paths with spaces, Unicode, apostrophes, and parentheses are
-passed as argv values; the application never constructs a shell command or uses `shell=True`.
-
-## PyInstaller builds
-
-Both builds use the same entry point, executable name, Analysis/PYZ/EXE settings, hidden imports,
-data list, optimization, console setting, and UPX setting from `build_common.py`. The two SPEC
-files differ only in the `BUNDLE_FFMPEG` Boolean. This keeps them from drifting apart.
-
-Build artifacts are written under `dist/` by PyInstaller.
-
-### Bundled build
-
-```bash
-pyinstaller build_bundled.spec
-```
-
-This build uses `shutil.which` with the platform's canonical executable names (`ffmpeg.exe` and
-`ffprobe.exe` on Windows). It fails immediately with an actionable message if either is missing
-or resolves to a command wrapper instead of the required executable. Both programs are added
-under the bundle's `ffmpeg-bin` directory.
-
-At runtime, a frozen application checks `sys._MEIPASS/ffmpeg-bin` and uses the bundled pair only
-when both files exist. A partial bundle is rejected rather than mixing one bundled program with
-one system program. The resolved absolute paths are supplied to every graph compilation and
-probe call.
-
-> Most official Windows FFmpeg distributions are self-contained. If your FFmpeg executables
-> depend on separate shared libraries, use a static distribution or extend the build binary list
-> to package those vendor-specific libraries too.
+The repository contains two PyInstaller builds.
 
 ### PATH build
 
 ```bash
-pyinstaller build_path.spec
+python -m PyInstaller --noconfirm --clean build_path.spec
 ```
 
-This build does not package FFmpeg, FFprobe, or substitutes. At startup it resolves both through
-the user's `PATH` and launch-checks each with `-version`. If either is missing, the program asks
-the user to install FFmpeg and make both commands available.
+This build resolves FFmpeg and FFprobe from the target machine's `PATH` at runtime.
 
-When a frozen PATH build launches external tools, the centralized process layer removes
-PyInstaller-only native-library search paths for the child process. This avoids loading bundled
-Python DLLs/shared libraries into a system FFmpeg process.
+### Bundled FFmpeg build
 
-## Tests
+```bash
+python -m PyInstaller --noconfirm --clean build_bundled.spec
+```
 
-The core logic is designed for dependency injection and can be tested without encoding a large
-video:
+This build locates `ffmpeg` and `ffprobe` on the build machine and embeds the pair in the executable.
+
+Build output is written under `dist/`.
+
+Both variants pass `icon.ico` to PyInstaller, which embeds it in the Windows executable.
+The macOS output is a console binary rather than an `.app`, and Linux desktop launchers
+keep their icons separately from the executable, so those two artifacts do not display an
+embedded application icon.
+
+### GitHub Actions builds
+
+The `Build executables` workflow runs on Windows x64, Linux x64, and macOS Intel. Each
+runner creates the PATH variant first, downloads a standalone FFmpeg/FFprobe pair, creates
+the bundled variant, smoke-tests both, and uploads one package containing both executables.
+
+Run it from the repository's **Actions** tab, or push a tag such as `v1.0.0`. The artifacts
+are retained for 14 days. The macOS build uses GitHub's Intel runner because the upstream
+macOS static FFmpeg downloads used by the workflow are x86-64 builds.
+
+## Development
+
+Install the optional development dependencies:
 
 ```bash
 python -m pip install -r requirements-optional.txt
-python -m pytest -v
 ```
 
-Tests cover bitrate calculation, option generation, cache loading and corruption, cached
-validation, automatic selection, manual override isolation, executable resolution, custom
-FFmpeg paths containing spaces, FFprobe parsing, output naming, and SPEC synchronization.
-
-For a local integration test, create a short sample and compress it with the CPU encoder:
+Run the test suite:
 
 ```bash
-ffmpeg -f lavfi -i testsrc2=size=640x360:rate=30 \
-  -f lavfi -i sine=frequency=1000 -t 3 -c:v libx264 -c:a aac sample.mp4
-python main.py sample.mp4 --target-size 2 --encoder cpu --debug
+python -m pytest
 ```
 
-PowerShell uses a backtick for command continuation instead of `\`.
+Lint and check formatting:
+
+```bash
+python -m ruff check .
+python -m ruff format --check .
+```
+
+Format the project:
+
+```bash
+python -m ruff format .
+```
+
+The repository also includes VS Code settings, recommended extensions, run/test tasks, and both PyInstaller build tasks under `.vscode/`.
 
 ## Troubleshooting
 
-### FFmpeg or FFprobe was not found
-
-Run both commands in the same terminal used to start/build the application:
+For FFmpeg or FFprobe issues:
 
 ```bash
 ffmpeg -version
 ffprobe -version
 ```
 
-If either fails, install FFmpeg and add its `bin` directory to `PATH`, then open a new terminal.
-Alternatively, distribute the bundled build.
+For encoder-selection issues:
 
-### A hardware encoder is skipped
-
-Use `--debug --redetect-encoder`. Common causes are an FFmpeg build without the encoder, an old
-or missing graphics driver/runtime, unsupported hardware, or a driver/FFmpeg combination that
-does not accept one of the required advanced quality options.
-
-### A cached encoder stopped working
-
-Normal startup validates it and automatically redetects on failure. You can request that flow
-explicitly with `--redetect-encoder`. Deleting `config.json` also produces a first-run scan, but
-is normally unnecessary.
-
-### The output is over the target
-
-The three-percent overhead reserve handles typical MP4 overhead, but constrained VBR encoders can
-overshoot on difficult material or very short clips. Try a slightly smaller requested target.
-The result summary always reports the actual size and target status.
-
-### The process was interrupted
-
-The application sends FFmpeg a graceful interrupt, escalates to termination if needed, waits for
-the child and its output readers, and removes the temporary output. The source is never modified.
-
-## Project layout
-
-```text
-.
-├── main.py
-├── compressor/
-│   ├── __init__.py
-│   ├── __main__.py
-│   ├── bitrate.py
-│   ├── cli.py
-│   ├── compression.py
-│   ├── config.py
-│   ├── encoders.py
-│   ├── errors.py
-│   ├── ffmpeg_tools.py
-│   ├── models.py
-│   ├── probe.py
-│   └── utils.py
-├── tests/
-├── build_common.py
-├── build_bundled.spec
-├── build_path.spec
-├── requirements.txt
-├── pyproject.toml
-└── .gitignore
+```bash
+python main.py --show-encoder
+python main.py --redetect-encoder
 ```
+
+For detailed compression or encoder diagnostics:
+
+```bash
+python main.py video.mp4 --debug
+```
+
+If the final file is slightly larger than the target, use a slightly smaller requested size when an upload service enforces a strict hard limit.
+
+## License
+
+This project is licensed under the GNU General Public License v3.0. See [`LICENSE`](LICENSE) for the full license text.

@@ -65,7 +65,9 @@ class CompressionResult(
             "target_size_mb",
             "met_target",
             "bitrate_budget",
+            "output_resolution",
         ),
+        defaults=(None,),
     )
 ):
     """Summary of a completed compression operation."""

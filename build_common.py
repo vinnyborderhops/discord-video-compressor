@@ -9,6 +9,7 @@ from PyInstaller.building.build_main import Analysis
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 ENTRY_POINT = PROJECT_ROOT / "main.py"
+APPLICATION_ICON = PROJECT_ROOT / "icon.ico"
 APPLICATION_NAME = "DiscordVideoCompressor"
 BUNDLED_BINARY_DIRECTORY = "ffmpeg-bin"
 
@@ -85,6 +86,7 @@ def build_application(*, bundle_ffmpeg):
         analysis.datas,
         [],
         name=APPLICATION_NAME,
+        icon=str(APPLICATION_ICON),
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,

@@ -1,0 +1,175 @@
+name: Build executables
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.platform }} x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            runner: windows-latest
+            executable_suffix: .exe
+            package_suffix: .zip
+          - platform: linux
+            runner: ubuntu-latest
+            executable_suffix: ""
+            package_suffix: .tar.gz
+          - platform: macos
+            runner: macos-15-intel
+            executable_suffix: ""
+            package_suffix: .tar.gz
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip -r requirements.txt -r requirements-optional.txt
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Build PATH variant
+        shell: bash
+        run: |
+          python -m PyInstaller --noconfirm --clean build_path.spec
+          mkdir -p release
+          mv "dist/DiscordVideoCompressor${{ matrix.executable_suffix }}" \
+            "release/DiscordVideoCompressor-${{ matrix.platform }}-x64-path${{ matrix.executable_suffix }}"
+
+      - name: Download Windows FFmpeg and FFprobe
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $archive = Join-Path $env:RUNNER_TEMP "ffmpeg-windows.zip"
+          $extractDirectory = Join-Path $env:RUNNER_TEMP "ffmpeg-windows"
+          $toolDirectory = Join-Path $env:RUNNER_TEMP "ffmpeg-tools"
+
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $extractDirectory
+
+          New-Item -ItemType Directory -Path $toolDirectory | Out-Null
+          $ffmpeg = Get-ChildItem -Path $extractDirectory -Filter "ffmpeg.exe" -Recurse |
+            Select-Object -First 1
+          $ffprobe = Get-ChildItem -Path $extractDirectory -Filter "ffprobe.exe" -Recurse |
+            Select-Object -First 1
+          if ($null -eq $ffmpeg -or $null -eq $ffprobe) {
+            throw "The Windows FFmpeg archive did not contain ffmpeg.exe and ffprobe.exe."
+          }
+
+          Copy-Item -LiteralPath $ffmpeg.FullName -Destination $toolDirectory
+          Copy-Item -LiteralPath $ffprobe.FullName -Destination $toolDirectory
+          Add-Content -LiteralPath $env:GITHUB_PATH -Value $toolDirectory -Encoding utf8
+
+      - name: Download Linux FFmpeg and FFprobe
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/ffmpeg-linux.tar.xz"
+          extract_directory="$RUNNER_TEMP/ffmpeg-linux"
+          tool_directory="$RUNNER_TEMP/ffmpeg-tools"
+
+          curl --fail --location --silent --show-error \
+            "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" \
+            --output "$archive"
+          mkdir -p "$extract_directory" "$tool_directory"
+          tar -xJf "$archive" --strip-components=1 -C "$extract_directory"
+          cp "$extract_directory/ffmpeg" "$extract_directory/ffprobe" "$tool_directory/"
+          chmod +x "$tool_directory/ffmpeg" "$tool_directory/ffprobe"
+          echo "$tool_directory" >> "$GITHUB_PATH"
+
+      - name: Download macOS FFmpeg and FFprobe
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ffmpeg_archive="$RUNNER_TEMP/ffmpeg-macos.zip"
+          ffprobe_archive="$RUNNER_TEMP/ffprobe-macos.zip"
+          ffmpeg_extract="$RUNNER_TEMP/ffmpeg-macos"
+          ffprobe_extract="$RUNNER_TEMP/ffprobe-macos"
+          tool_directory="$RUNNER_TEMP/ffmpeg-tools"
+
+          curl --fail --location --silent --show-error \
+            "https://evermeet.cx/ffmpeg/getrelease/zip" \
+            --output "$ffmpeg_archive"
+          curl --fail --location --silent --show-error \
+            "https://evermeet.cx/ffmpeg/getrelease/ffprobe/zip" \
+            --output "$ffprobe_archive"
+          mkdir -p "$ffmpeg_extract" "$ffprobe_extract" "$tool_directory"
+          unzip -q "$ffmpeg_archive" -d "$ffmpeg_extract"
+          unzip -q "$ffprobe_archive" -d "$ffprobe_extract"
+
+          find "$ffmpeg_extract" -type f -name ffmpeg -exec cp {} "$tool_directory/ffmpeg" \;
+          find "$ffprobe_extract" -type f -name ffprobe -exec cp {} "$tool_directory/ffprobe" \;
+          test -f "$tool_directory/ffmpeg"
+          test -f "$tool_directory/ffprobe"
+          chmod +x "$tool_directory/ffmpeg" "$tool_directory/ffprobe"
+          echo "$tool_directory" >> "$GITHUB_PATH"
+
+      - name: Verify downloaded FFmpeg tools
+        run: |
+          ffmpeg -version
+          ffprobe -version
+
+      - name: Smoke-test PATH variant
+        shell: bash
+        run: >-
+          "./release/DiscordVideoCompressor-${{ matrix.platform }}-x64-path${{ matrix.executable_suffix }}"
+          --show-encoder --encoder cpu
+
+      - name: Build bundled variant
+        shell: bash
+        run: |
+          python -m PyInstaller --noconfirm --clean build_bundled.spec
+          mv "dist/DiscordVideoCompressor${{ matrix.executable_suffix }}" \
+            "release/DiscordVideoCompressor-${{ matrix.platform }}-x64-bundled${{ matrix.executable_suffix }}"
+
+      - name: Smoke-test bundled variant
+        shell: bash
+        run: >-
+          "./release/DiscordVideoCompressor-${{ matrix.platform }}-x64-bundled${{ matrix.executable_suffix }}"
+          --show-encoder --encoder cpu
+
+      - name: Package Windows executables
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "packages" | Out-Null
+          Compress-Archive -Path "release/*" -DestinationPath "packages/DiscordVideoCompressor-windows-x64.zip"
+
+      - name: Package Unix executables
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p packages
+          tar -czf \
+            "packages/DiscordVideoCompressor-${{ matrix.platform }}-x64.tar.gz" \
+            -C release .
+
+      - name: Upload both variants
+        uses: actions/upload-artifact@v4
+        with:
+          name: DiscordVideoCompressor-${{ matrix.platform }}-x64
+          path: packages/DiscordVideoCompressor-${{ matrix.platform }}-x64${{ matrix.package_suffix }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
