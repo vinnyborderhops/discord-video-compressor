@@ -267,9 +267,11 @@ The `Build executables` workflow runs on Windows x64, Linux x64, and macOS Intel
 runner creates the PATH variant first, downloads a standalone FFmpeg/FFprobe pair, creates
 the bundled variant, smoke-tests both, and uploads one package containing both executables.
 
-Run it from the repository's **Actions** tab, or push a tag such as `v1.0.0`. The artifacts
-are retained for 14 days. The macOS build uses GitHub's Intel runner because the upstream
-macOS static FFmpeg downloads used by the workflow are x86-64 builds.
+Run it from the repository's **Actions** tab to create artifacts retained for 14 days. Pushing
+a tag such as `v1.0.0` also creates a GitHub Release with generated release notes and attaches
+all three platform packages. Re-running that tag workflow replaces same-named release assets.
+The macOS build uses GitHub's Intel runner because the upstream macOS static FFmpeg downloads
+used by the workflow are x86-64 builds.
 
 ## Development
 
