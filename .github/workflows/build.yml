@@ -27,6 +27,7 @@ jobs:
             executable_suffix: ""
             package_suffix: .tar.gz
           - platform: macos
+            # The downloaded macOS FFmpeg binaries are x86-64, so the runner must match.
             runner: macos-15-intel
             executable_suffix: ""
             package_suffix: .tar.gz
@@ -55,6 +56,7 @@ jobs:
           mv "dist/DiscordVideoCompressor${{ matrix.executable_suffix }}" \
             "release/DiscordVideoCompressor-${{ matrix.platform }}-x64-path${{ matrix.executable_suffix }}"
 
+      # Each platform adds its downloaded pair to PATH for the later bundled build.
       - name: Download Windows FFmpeg and FFprobe
         if: runner.os == 'Windows'
         shell: pwsh
@@ -171,6 +173,7 @@ jobs:
           name: DiscordVideoCompressor-${{ matrix.platform }}-x64
           path: packages/DiscordVideoCompressor-${{ matrix.platform }}-x64${{ matrix.package_suffix }}
           if-no-files-found: error
+          # Packages are already compressed; another compression pass only wastes runner time.
           compression-level: 0
           retention-days: 14
 
@@ -193,6 +196,7 @@ jobs:
       - name: Verify release assets
         shell: bash
         run: |
+          # Refuse to publish a partial release if any platform artifact is missing.
           shopt -s nullglob
           assets=(release-assets/*)
           if (( ${#assets[@]} != 3 )); then
@@ -209,6 +213,7 @@ jobs:
         run: |
           assets=(release-assets/*)
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            # Tag workflow reruns must replace stale assets instead of failing on name collisions.
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
           else
             gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
