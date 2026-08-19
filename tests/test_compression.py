@@ -184,12 +184,12 @@ def test_retry_bitrate_corrects_measured_total_and_preserves_audio():
 
     corrected = _calculate_retry_bitrate(
         current,
-        target_bytes=20 * 1024 * 1024,
-        actual_bytes=20.75 * 1024 * 1024,
+        target_bytes=10 * 1024 * 1024,
+        actual_bytes=10.75 * 1024 * 1024,
         safety_factor=0.995,
     )
 
-    expected_total = 1550.0 * (20.0 / 20.75) * 0.995
+    expected_total = 1550.0 * (10.0 / 10.75) * 0.995
     assert corrected.total_kbps == pytest.approx(expected_total)
     assert corrected.video_kbps == pytest.approx(expected_total - 100.0)
     assert corrected.audio_kbps == 100.0
