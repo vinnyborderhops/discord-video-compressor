@@ -106,8 +106,7 @@ class FFmpegTools:
             return subprocess.run(
                 list(command),
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 timeout=timeout,
                 check=False,
                 shell=False,

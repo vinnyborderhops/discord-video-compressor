@@ -77,7 +77,7 @@ def test_settings_are_created_with_defaults_on_first_load(tmp_path):
 
     assert store.settings_path.name == "settings.json"
     assert store.encoder_cache_path.name == "encoder-cache.json"
-    assert settings.target_size_mb == 20.0
+    assert settings.target_size_mb == 10.0
     assert settings.encoder == "auto"
     assert settings.output.suffix == "_compressed"
     assert settings.quality.auto_downscale is True
