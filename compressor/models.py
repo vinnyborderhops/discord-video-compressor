@@ -66,8 +66,10 @@ class CompressionResult(
             "met_target",
             "bitrate_budget",
             "output_resolution",
+            "encoding_attempts",
         ),
-        defaults=(None,),
+        # Preserve positional construction from before retry counts were exposed.
+        defaults=(None, 1),
     )
 ):
     """Summary of a completed compression operation."""

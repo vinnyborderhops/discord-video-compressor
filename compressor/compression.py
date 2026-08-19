@@ -20,6 +20,7 @@ from compressor.bitrate import calculate_bitrate
 from compressor.config import (
     DISK_HEADROOM_FACTOR,
     FFMPEG_STDERR_TAIL_LINES,
+    LOW_VIDEO_BITRATE_WARNING_KBPS,
     MAX_AUDIO_KBPS,
     MIN_AUDIO_KBPS,
     MINIMUM_DISK_HEADROOM_BYTES,
@@ -43,6 +44,11 @@ from compressor.utils import path_is_occupied, paths_refer_to_same_location
 
 LOGGER = logging.getLogger(__name__)
 
+MAX_ENCODING_ATTEMPTS = 3
+# Encoders and container overhead do not hit nominal bitrates exactly. Each retry
+# corrects against the measured file size, then reserves progressively more headroom.
+RETRY_SAFETY_FACTORS = (0.995, 0.98)
+
 
 def compress_video(
     input_path,
@@ -57,6 +63,7 @@ def compress_video(
     minimum_dimension=MINIMUM_OUTPUT_DIMENSION,
     min_audio_kbps=MIN_AUDIO_KBPS,
     max_audio_kbps=MAX_AUDIO_KBPS,
+    status_callback=None,
 ):
     """Compress one video to an MP4 near or below the requested target size."""
     input_path, output_path = _validate_paths(input_path, output_path)
@@ -103,46 +110,80 @@ def compress_video(
         ) from exc
 
     temporary_path = _temporary_output_path(output_path)
-    graph = _build_compression_graph(
-        input_path,
-        temporary_path,
-        video_info,
-        bitrate_budget,
-        encoder_type,
-        output_resolution=output_resolution,
-    )
-
     encode_started = time.monotonic()
+    target_bytes = target_size_mb * 1024.0 * 1024.0
+    final_size = None
+    encoding_attempts = 0
     try:
-        return_code, stderr_tail = _run_ffmpeg_with_progress(
-            graph,
-            tools,
-            duration_seconds=video_info.duration,
-            progress_callback=progress_callback,
-        )
-        encoding_duration = time.monotonic() - encode_started
-        if return_code != 0:
-            raise _compression_failure(stderr_tail, encoder_type)
+        for attempt in range(1, MAX_ENCODING_ATTEMPTS + 1):
+            encoding_attempts = attempt
+            _report_status(
+                status_callback,
+                f"Encoding attempt {attempt}/{MAX_ENCODING_ATTEMPTS}...",
+            )
+            graph = _build_compression_graph(
+                input_path,
+                temporary_path,
+                video_info,
+                bitrate_budget,
+                encoder_type,
+                output_resolution=output_resolution,
+            )
+            return_code, stderr_tail = _run_ffmpeg_with_progress(
+                graph,
+                tools,
+                duration_seconds=video_info.duration,
+                progress_callback=progress_callback,
+            )
+            if return_code != 0:
+                raise _compression_failure(stderr_tail, encoder_type)
 
-        _verify_temporary_output(temporary_path, tools)
+            _verify_temporary_output(temporary_path, tools)
+            final_size = _read_output_size(temporary_path)
+            _report_status(
+                status_callback,
+                f"Output size: {final_size / (1024 * 1024):.2f} MiB "
+                f"(target: {target_size_mb:.2f} MiB)",
+            )
+            if final_size <= target_bytes:
+                _report_status(status_callback, "Target reached.")
+                break
+            if attempt == MAX_ENCODING_ATTEMPTS:
+                _report_status(
+                    status_callback,
+                    f"Target still exceeded after {MAX_ENCODING_ATTEMPTS} attempts.",
+                )
+                break
+
+            overshoot_percentage = (final_size / target_bytes - 1.0) * 100.0
+            previous_video_kbps = bitrate_budget.video_kbps
+            bitrate_budget = _calculate_retry_bitrate(
+                bitrate_budget,
+                target_bytes,
+                final_size,
+                RETRY_SAFETY_FACTORS[attempt - 1],
+            )
+            _report_status(
+                status_callback,
+                f"Target exceeded by {overshoot_percentage:.1f}%; adjusting video bitrate "
+                f"from {previous_video_kbps:.0f} to {bitrate_budget.video_kbps:.0f} kbps "
+                "and retrying...",
+            )
+            _remove_temporary_output(temporary_path)
+
+        encoding_duration = time.monotonic() - encode_started
         _publish_output(temporary_path, output_path)
     except KeyboardInterrupt as exc:
         raise InterruptedCompressionError() from exc
     finally:
         _remove_temporary_output(temporary_path)
 
-    try:
-        final_size = output_path.stat().st_size
-    except OSError as exc:
-        raise CompressionError(
-            f"The output was encoded but its final size could not be read: '{output_path}'.",
-            details=str(exc),
-        ) from exc
+    if final_size is None:
+        raise CompressionError("The encoder did not produce an output file.")
 
     compression_percentage = (
         (1.0 - final_size / original_size) * 100.0 if original_size > 0 else 0.0
     )
-    target_bytes = target_size_mb * 1024.0 * 1024.0
     return CompressionResult(
         input_path=input_path,
         output_path=output_path,
@@ -157,7 +198,42 @@ def compress_video(
         met_target=final_size <= target_bytes,
         bitrate_budget=bitrate_budget,
         output_resolution=output_resolution,
+        encoding_attempts=encoding_attempts,
     )
+
+
+def _calculate_retry_bitrate(current_budget, target_bytes, actual_bytes, safety_factor):
+    """Correct measured overshoot while keeping the audio allocation fixed."""
+    correction = target_bytes / actual_bytes
+    corrected_total_kbps = current_budget.total_kbps * correction * safety_factor
+    video_kbps = corrected_total_kbps - current_budget.audio_kbps
+    if not math.isfinite(video_kbps) or video_kbps <= 0:
+        raise CompressionError(
+            "The target is too small to retry while preserving the selected audio bitrate."
+        )
+    return type(current_budget)(
+        total_kbps=video_kbps + current_budget.audio_kbps,
+        video_kbps=video_kbps,
+        audio_kbps=current_budget.audio_kbps,
+        low_video_bitrate=video_kbps < LOW_VIDEO_BITRATE_WARNING_KBPS,
+    )
+
+
+def _read_output_size(path):
+    try:
+        return path.stat().st_size
+    except OSError as exc:
+        raise CompressionError(
+            "The encoded temporary output size could not be read.",
+            details=str(exc),
+        ) from exc
+
+
+def _report_status(callback, message):
+    if callback:
+        callback(message)
+    else:
+        LOGGER.info(message)
 
 
 def _validate_paths(input_path, output_path):

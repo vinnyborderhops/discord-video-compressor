@@ -172,6 +172,13 @@ def main(argv=None):
         print(f"Target: {target_size_mb:g} MB")
 
         progress = ConsoleProgress()
+
+        def report_status(message):
+            progress.finish()
+            if message.startswith("Encoding attempt"):
+                progress.reset()
+            print(message)
+
         try:
             result = compress_video(
                 args.input,
@@ -185,6 +192,7 @@ def main(argv=None):
                 minimum_dimension=settings.quality.minimum_dimension,
                 min_audio_kbps=settings.audio.minimum_bitrate_kbps,
                 max_audio_kbps=settings.audio.maximum_bitrate_kbps,
+                status_callback=report_status,
             )
         finally:
             progress.finish()
@@ -298,6 +306,9 @@ class ConsoleProgress:
             print()
             self._line_open = False
 
+    def reset(self):
+        self._last_bucket = -1
+
 
 def _validate_cli_target(target_size_mb):
     if not math.isfinite(target_size_mb) or target_size_mb <= 0:
@@ -327,6 +338,7 @@ def _print_result(result):
     print(f"Size reduction: {result.compression_percentage:.2f}%")
     print(f"Selected encoder: {result.encoder_type} ({result.encoder})")
     print(f"Encoding duration: {result.encoding_duration_seconds:.2f} seconds")
+    print(f"Encoding attempts: {result.encoding_attempts}")
     print(f"Target size: {result.target_size_mb:g} MB")
     print(f"Met target: {target_status}")
     print(f"Saved to: {result.output_path}")

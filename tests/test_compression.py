@@ -5,6 +5,7 @@ import pytest
 
 from compressor.compression import (
     _build_compression_graph,
+    _calculate_retry_bitrate,
     _progress_percentage,
     _publish_output,
     compress_video,
@@ -176,6 +177,87 @@ def test_graph_downscales_to_selected_resolution(
     )
 
     assert "scale=444:250:flags=lanczos,format=yuv420p" in command
+
+
+def test_retry_bitrate_corrects_measured_total_and_preserves_audio():
+    current = BitrateBudget(1550.0, 1450.0, 100.0, False)
+
+    corrected = _calculate_retry_bitrate(
+        current,
+        target_bytes=20 * 1024 * 1024,
+        actual_bytes=20.75 * 1024 * 1024,
+        safety_factor=0.995,
+    )
+
+    expected_total = 1550.0 * (20.0 / 20.75) * 0.995
+    assert corrected.total_kbps == pytest.approx(expected_total)
+    assert corrected.video_kbps == pytest.approx(expected_total - 100.0)
+    assert corrected.audio_kbps == 100.0
+
+
+def test_oversized_encodes_retry_until_target_is_reached(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tools: FFmpegTools,
+):
+    input_path = tmp_path / "input.mp4"
+    input_path.write_bytes(b"source")
+    output_path = tmp_path / "output.mp4"
+    temporary_path = tmp_path / ".output.part.mp4"
+    info = VideoInfo(
+        path=input_path,
+        duration=5.0,
+        width=640,
+        height=360,
+        video_codec="h264",
+        has_audio=True,
+        audio_codec="aac",
+        fps=30.0,
+    )
+    encoded_sizes = [
+        int(1.0375 * 1024 * 1024),
+        int(1.005 * 1024 * 1024),
+        int(0.98 * 1024 * 1024),
+    ]
+    budgets = []
+    statuses = []
+
+    monkeypatch.setattr("compressor.compression.probe_video", lambda *_args: info)
+    monkeypatch.setattr("compressor.compression._validate_disk_space", lambda *_args: None)
+    monkeypatch.setattr(
+        "compressor.compression._temporary_output_path", lambda *_args: temporary_path
+    )
+    monkeypatch.setattr("compressor.compression._verify_temporary_output", lambda *_args: None)
+
+    def build_graph(_input, _output, _info, bitrate_budget, _encoder, **_kwargs):
+        budgets.append(bitrate_budget)
+        return object()
+
+    def run_encode(*_args, **_kwargs):
+        temporary_path.write_bytes(b"0" * encoded_sizes[len(budgets) - 1])
+        return 0, ""
+
+    monkeypatch.setattr("compressor.compression._build_compression_graph", build_graph)
+    monkeypatch.setattr("compressor.compression._run_ffmpeg_with_progress", run_encode)
+
+    result = compress_video(
+        input_path,
+        output_path,
+        1.0,
+        "cpu",
+        tools=tools,
+        status_callback=statuses.append,
+    )
+
+    assert result.met_target
+    assert result.encoding_attempts == 3
+    assert result.final_size_bytes == encoded_sizes[-1]
+    assert len(budgets) == 3
+    assert budgets[1].video_kbps < budgets[0].video_kbps
+    assert budgets[2].video_kbps < budgets[1].video_kbps
+    assert statuses[0] == "Encoding attempt 1/3..."
+    assert "Target exceeded by 3.7%" in statuses[2]
+    assert statuses[-1] == "Target reached."
 
 
 def test_completed_temporary_output_is_published_without_overwrite(tmp_path: Path):

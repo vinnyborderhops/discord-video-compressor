@@ -6,7 +6,7 @@ The compressor probes the source with FFprobe, calculates a video/audio bitrate 
 
 ## Features
 
-* Configurable target size (`20 MB` by default)
+* Configurable target size (`10 MB` by default)
 * H.264 video with AAC audio when audio is present
 * Automatic encoder detection using real initialization tests
 
@@ -19,6 +19,7 @@ The compressor probes the source with FFprobe, calculates a video/audio bitrate 
 * Temporary per-run encoder overrides
 * Bitrate-aware resolution downscaling without upscaling
 * Terminal progress reporting
+* Measured bitrate correction with up to two automatic oversize retries
 * MP4 `faststart` metadata
 * Same-directory temporary encodes and validated final publication
 * No-overwrite output behavior and filename collision avoidance
@@ -86,7 +87,7 @@ python -m pip install -r requirements-optional.txt
 
 ## Usage
 
-Compress a video using the default `20 MB` target:
+Compress a video using the default `10 MB` target:
 
 ```bash
 python main.py video.mp4
@@ -163,7 +164,7 @@ Default settings:
 ```json
 {
   "schema_version": 1,
-  "target_size_mb": 20.0,
+  "target_size_mb": 10.0,
   "encoder": "auto",
   "output": {
     "directory": "source",
@@ -228,9 +229,11 @@ At a high level, each run:
 5. Assigns the remaining bitrate to H.264 video.
 6. Reduces resolution when the available bitrate is too low for the source resolution.
 7. Encodes to a temporary MP4 while reporting progress.
-8. Validates the completed temporary output.
-9. Publishes the final file without silently overwriting another file.
-10. Reports the final size, size reduction, encoder, encode time, and target-size status.
+8. Validates and measures the completed temporary output.
+9. If oversized, corrects the total bitrate from the measured size while preserving the audio
+   allocation, then retries with progressively stronger safety margins.
+10. Publishes the final file without silently overwriting another file.
+11. Reports the final size, size reduction, encoder, encode time, attempt count, and target status.
 
 The compressor favors a useful bitrate-per-pixel level over preserving source resolution at any cost.
 
@@ -324,7 +327,8 @@ For detailed compression or encoder diagnostics:
 python main.py video.mp4 --debug
 ```
 
-If the final file is slightly larger than the target, use a slightly smaller requested size when an upload service enforces a strict hard limit.
+Oversized hardware VBR outputs are retried twice automatically. The first retry uses measured
+correction with a `0.995` safety factor; the final retry uses `0.98`.
 
 ## License
 

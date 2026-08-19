@@ -12,6 +12,7 @@ htmlcov/
 .venv/
 venv/
 env/
+*.bat
 
 # PyInstaller
 build/
